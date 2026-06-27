@@ -101,9 +101,11 @@
   .entry-info { flex: 1; min-width: 0; }
   .entry-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .entry-meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
-  .entry-price { font-size: 15px; font-weight: 600; color: var(--accent-text); white-space: nowrap; flex-shrink: 0; }
-  .entry-del { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; padding: 4px 6px; border-radius: 6px; line-height: 1; flex-shrink: 0; }
-  .entry-del:active { color: var(--danger); background: var(--danger-bg); }
+  .entry-price { font-size: 15px; font-weight: 600; color: var(--accent-text); white-space: nowrap; flex-shrink: 0; margin-right: 4px; }
+  .entry-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
+  .entry-btn { background: none; border: none; color: var(--text-muted); font-size: 14px; cursor: pointer; padding: 6px 8px; border-radius: 6px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+  .entry-btn:active { background: var(--surface-1); }
+  .entry-btn.del:active { color: var(--danger); background: var(--danger-bg); }
   .empty-state { text-align: center; padding: 36px 20px; color: var(--text-muted); }
   .empty-state .icon { font-size: 40px; margin-bottom: 10px; }
   .empty-state p { font-size: 14px; line-height: 1.6; }
@@ -162,7 +164,7 @@
         <span class="month-title" id="monthTitle"></span>
         <button onclick="changeMonth(1)" aria-label="下個月">›</button>
       </div>
-      <span class="month-badge" id="monthTotal">本月 $0</span>
+      <span class="month-badge" id="monthTotal">本月 0</span>
     </div>
     <div class="weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
     <div class="calendar" id="calendar"></div>
@@ -189,7 +191,7 @@
 <div class="modal-overlay" id="modalOverlay" onclick="closeIfOutside(event)">
   <div class="modal">
     <span class="modal-handle"></span>
-    <div class="modal-title">記錄飲食</div>
+    <div class="modal-title" id="modalTitle">記錄飲食</div>
     <div class="form-group">
       <label class="form-label">食物名稱</label>
       <input class="form-input" id="foodName" placeholder="例如：叉燒飯、奶茶" autocomplete="off" />
@@ -199,7 +201,7 @@
       <div class="mt-row" id="mtRow"></div>
     </div>
     <div class="form-group">
-      <label class="form-label">價錢 (HKD $)</label>
+      <label class="form-label">價錢</label>
       <input class="form-input" id="foodPrice" type="number" placeholder="0" inputmode="decimal" />
     </div>
     <div class="form-group">
@@ -208,7 +210,7 @@
     </div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">取消</button>
-      <button class="btn-save" onclick="saveEntry()">記錄</button>
+      <button class="btn-save" onclick="saveEntry()">儲存</button>
     </div>
   </div>
 </div>
@@ -226,7 +228,8 @@ let S = {
   selDate: new Date().toISOString().split('T')[0],
   meal: '午餐',
   tab: 'diary',
-  data: {}
+  data: {},
+  editIndex: -1
 };
 let chartInstances = {};
 
@@ -254,15 +257,24 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+// 核心修正：利用可靠的 YYYY-MM-DD 字串與正斜線替換法，徹底鎖定本地時區，不因跨國時區而差一天
+function getDayOfWeek(dateString) {
+  return new Date(dateString.replace(/-/g, '/')).getDay();
+}
+
 /* ─── Calendar ─── */
 function renderCal() {
   const today = new Date().toISOString().split('T')[0];
-  const first = new Date(S.yr, S.mo, 1).getDay();
+  
+  // 修正日曆首日星期的時區判定
+  const firstDateStr = `${S.yr}-${String(S.mo+1).padStart(2,'0')}-01`;
+  const first = getDayOfWeek(firstDateStr);
+  
   const days = new Date(S.yr, S.mo+1, 0).getDate();
   const prev = new Date(S.yr, S.mo, 0).getDate();
   const mos = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
   document.getElementById('monthTitle').textContent = `${S.yr}年 ${mos[S.mo]}`;
-  document.getElementById('monthTotal').textContent = `本月 $${Math.round(moTotal())}`;
+  document.getElementById('monthTotal').textContent = `本月 ${Math.round(moTotal())}`;
   let h = '';
   for (let i = 0; i < first; i++) {
     h += `<div class="dc other"><span class="dn">${prev-first+1+i}</span></div>`;
@@ -275,7 +287,7 @@ function renderCal() {
     if (ds === S.selDate) cls += ' selected';
     h += `<div class="${cls}" onclick="selDate('${ds}')">
       <span class="dn">${d}</span>
-      ${amt > 0 ? `<span class="da">$${Math.round(amt)}</span>` : ''}
+      ${amt > 0 ? `<span class="da">${Math.round(amt)}</span>` : ''}
     </div>`;
   }
   const rem = 42 - first - days;
@@ -317,9 +329,11 @@ function renderContent() {
 
 function renderDiary() {
   const ds = S.selDate, ents = entries(ds);
-  const [yr, mo, da] = ds.split('-');
+  const [, mo, da] = ds.split('-');
   const wds = ['日','一','二','三','四','五','六'];
-  const dow = new Date(ds).getDay();
+  
+  // 核心修正：主畫面日記的星期計算，完美對齊日曆
+  const dow = getDayOfWeek(ds);
   const tot = dayTotal(ds);
   const grouped = {};
   MEALS.forEach(m => grouped[m] = []);
@@ -327,7 +341,7 @@ function renderDiary() {
 
   let h = `<div class="date-hdr">
     <span class="date-label">${parseInt(mo)}月${parseInt(da)}日（週${wds[dow]}）</span>
-    ${ents.length ? `<span class="day-total-badge">$${Math.round(tot)}</span>` : ''}
+    ${ents.length ? `<span class="day-total-badge">${Math.round(tot)}</span>` : ''}
   </div>
   <button class="add-btn" onclick="openModal()">
     <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -336,7 +350,7 @@ function renderDiary() {
 
   if (ents.length) {
     h += `<div class="stats-row">
-      <div class="stat-card"><div class="stat-label">今日支出</div><div class="stat-val" style="color:var(--accent-text)">$${Math.round(tot)}</div></div>
+      <div class="stat-card"><div class="stat-label">今日支出</div><div class="stat-val" style="color:var(--accent-text)">${Math.round(tot)}</div></div>
     </div>`;
     MEALS.forEach((meal, mi) => {
       const items = grouped[meal];
@@ -349,8 +363,11 @@ function renderDiary() {
             <div class="entry-name">${e.name}</div>
             ${e.note ? `<div class="entry-meta">${e.note}</div>` : ''}
           </div>
-          <span class="entry-price">$${Math.round(parseFloat(e.price)||0)}</span>
-          <button class="entry-del" onclick="delEntry('${ds}',${ri})" aria-label="刪除">✕</button>
+          <span class="entry-price">${Math.round(parseFloat(e.price)||0)}</span>
+          <div class="entry-actions">
+            <button class="entry-btn edit" onclick="openModal(${ri})" aria-label="修改">✎</button>
+            <button class="entry-btn del" onclick="delEntry('${ds}',${ri})" aria-label="刪除">✕</button>
+          </div>
         </div>`;
       });
     });
@@ -394,7 +411,7 @@ function renderCharts() {
   }
   if (hasPie) {
     const legendH = pieLabels.map((l,i) =>
-      `<span class="pie-item"><span class="pie-dot" style="background:${pieColors[i]}"></span>${l} $${pieData[i]}</span>`
+      `<span class="pie-item"><span class="pie-dot" style="background:${pieColors[i]}"></span>${l} ${pieData[i]}</span>`
     ).join('');
     h += `<div class="chart-sec">
       <div class="chart-title">本月各餐別佔比</div>
@@ -414,9 +431,9 @@ function renderCharts() {
       data: { labels, datasets: [{ label: '支出', data: barData, backgroundColor: '#2a78d6', borderRadius: 4, borderSkipped: false }] },
       options: {
         indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `$${c.raw}` } } },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.raw}` } } },
         scales: {
-          x: { ticks: { callback: v => `$${v}`, color: '#898781', font: { size: 11 } }, grid: { color: 'rgba(128,128,128,0.12)' } },
+          x: { ticks: { callback: v => `${v}`, color: '#898781', font: { size: 11 } }, grid: { color: 'rgba(128,128,128,0.12)' } },
           y: { ticks: { color: '#898781', font: { size: 11 }, autoSkip: false }, grid: { display: false } }
         }
       }
@@ -430,7 +447,7 @@ function renderCharts() {
         responsive: true, maintainAspectRatio: false, cutout: '60%',
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: c => `$${c.raw}  (${Math.round(c.raw/pieTotal*100)}%)` } }
+          tooltip: { callbacks: { label: c => `${c.raw}  (${Math.round(c.raw/pieTotal*100)}%)` } }
         }
       }
     });
@@ -460,7 +477,7 @@ function renderExport() {
       <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       <div>
         <div class="export-btn-label">複製本月摘要</div>
-        <div class="export-btn-desc">純文字，方便貼到 WhatsApp</div>
+        <div class="export-btn-desc">純文字，方便貼到通訊軟體</div>
       </div>
     </button>
     <button class="export-btn" onclick="exportJSON()">
@@ -517,15 +534,19 @@ function copyText() {
   Object.keys(S.data).sort().filter(d => d.startsWith(pfx)).forEach(d => {
     const t = dayTotal(d); grand += t;
     const [,mo,da] = d.split('-');
-    txt += `\n${parseInt(mo)}/${parseInt(da)}（$${Math.round(t)}）\n`;
+    const wds = ['日','一','二','三','四','五','六'];
+    
+    // 核心修正：複製純文字時的星期計算也完全同步
+    const dow = getDayOfWeek(d);
+    txt += `\n${parseInt(mo)}/${parseInt(da)}（週${wds[dow]}）─ [ ${Math.round(t)} ]\n`;
     entries(d).forEach(e => {
       const sub = (parseFloat(e.price)||0)*(parseInt(e.qty)||1);
       txt += `  ${MEAL_ICONS[MEALS.indexOf(e.meal)]}${e.name}`;
       if (e.qty > 1) txt += ` x${e.qty}`;
-      txt += `  $${Math.round(sub)}\n`;
+      txt += `  ${Math.round(sub)}\n`;
     });
   });
-  txt += `\n${'─'.repeat(22)}\n本月合計：$${Math.round(grand)}`;
+  txt += `\n${'─'.repeat(22)}\n本月合計：${Math.round(grand)}`;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(txt).then(() => showToast('已複製到剪貼板 ✓')).catch(() => showToast('複製失敗，請手動選取'));
   } else {
@@ -538,17 +559,34 @@ function copyText() {
 }
 
 /* ─── Modal ─── */
-function openModal() {
-  S.meal = '午餐';
+function openModal(idx = -1) {
+  S.editIndex = idx;
+  
+  if (idx > -1) {
+    const item = S.data[S.selDate][idx];
+    document.getElementById('modalTitle').textContent = '修改飲食記錄';
+    document.getElementById('foodName').value = item.name;
+    document.getElementById('foodPrice').value = item.price || '';
+    document.getElementById('foodNote').value = item.note || '';
+    S.meal = item.meal;
+  } else {
+    document.getElementById('modalTitle').textContent = '記錄飲食';
+    document.getElementById('foodName').value = '';
+    document.getElementById('foodPrice').value = '';
+    document.getElementById('foodNote').value = '';
+    S.meal = '午餐';
+  }
+
   document.getElementById('mtRow').innerHTML = MEALS.map((m,i) =>
     `<button class="mt-btn${m===S.meal?' sel':''}" onclick="selMeal('${m}')">${MEAL_ICONS[i]}<br>${m}</button>`
   ).join('');
-  ['foodName','foodPrice','foodNote'].forEach(id => document.getElementById(id).value = '');
+  
   document.getElementById('modalOverlay').classList.add('show');
   setTimeout(() => document.getElementById('foodName').focus(), 200);
 }
 function closeModal() {
   document.getElementById('modalOverlay').classList.remove('show');
+  S.editIndex = -1;
 }
 function closeIfOutside(e) {
   if (e.target === document.getElementById('modalOverlay')) closeModal();
@@ -560,16 +598,25 @@ function selMeal(m) {
 function saveEntry() {
   const name = document.getElementById('foodName').value.trim();
   if (!name) { document.getElementById('foodName').focus(); return; }
-  if (!S.data[S.selDate]) S.data[S.selDate] = [];
-  S.data[S.selDate].push({
+  
+  const entryObj = {
     name, 
     meal: S.meal,
     price: parseFloat(document.getElementById('foodPrice').value) || 0,
     qty: 1,
     note: document.getElementById('foodNote').value.trim()
-  });
+  };
+
+  if (S.editIndex > -1) {
+    S.data[S.selDate][S.editIndex] = entryObj;
+    showToast(`已更新「${name}」✓`);
+  } else {
+    if (!S.data[S.selDate]) S.data[S.selDate] = [];
+    S.data[S.selDate].push(entryObj);
+    showToast(`已記錄「${name}」✓`);
+  }
+  
   save(); closeModal(); renderCal(); renderContent();
-  showToast(`已記錄「${name}」✓`);
 }
 function delEntry(ds, idx) {
   if (!confirm('刪除這條記錄？')) return;
